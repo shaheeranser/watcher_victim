@@ -1,0 +1,22 @@
+# Private planning artifacts (requirements/design/tasks + setup prompt).
+# Kept locally so the public repo stays focused on the harness itself.
+docs/
+.commandcode/
+
+# Runtime / scratch output from evaluations.
+reports/
+*.log
+payloads/
+
+# Node (the service is dependency-free, but keep the tree clean).
+node_modules/
+
+# Python caches from the evaluator.
+__pycache__/
+*.pyc
+
+# Command Code session state.
+.commandcode/
+
+# OS noise.
+.DS_Store

@@ -1,0 +1,23 @@
+{
+  "name": "timeout",
+  "summary": "POST /api/bulk buffers the entire request body into memory with no size limit; an oversized payload exhausts the Node.js heap and aborts the process.",
+  "trigger": "./break.sh timeout",
+  "expected_log_signature": "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+  "ground_truth": "POST /api/bulk reads the whole request body and concatenates it into a single string without any body-size limit. An oversized payload (hundreds of megabytes) exhausts the Node.js heap during buffering, producing a fatal V8 out-of-memory error that aborts the process.",
+  "match": {
+    "keywords": [
+      "heap",
+      "out of memory",
+      "oom",
+      "payload",
+      "body",
+      "size limit",
+      "memory",
+      "/api/bulk",
+      "buffer",
+      "exhaust"
+    ],
+    "min_keywords": 3,
+    "similarity_threshold": 0.3
+  }
+}

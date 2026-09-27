@@ -1,0 +1,22 @@
+{
+  "name": "bad-input",
+  "summary": "A null field in the JSON body makes POST /api/items dereference null, throwing an uncaught TypeError that crashes the process with a real stack trace.",
+  "trigger": "./break.sh bad-input",
+  "variants": ["name", "quantity", "tags", "malformed"],
+  "expected_log_signature": "TypeError: Cannot read properties of null (reading 'trim')",
+  "ground_truth": "POST /api/items calls payload.name.trim() without validating the request body. A JSON body whose name field is null makes that call dereference null, throwing an uncaught TypeError inside the request handler with no try/catch; Node prints the stack trace and terminates the process.",
+  "match": {
+    "keywords": [
+      "null",
+      "trim",
+      "typeerror",
+      "payload",
+      "name",
+      "/api/items",
+      "uncaught",
+      "not validated"
+    ],
+    "min_keywords": 3,
+    "similarity_threshold": 0.3
+  }
+}

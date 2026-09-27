@@ -1,0 +1,22 @@
+{
+  "name": "restart-loop",
+  "summary": "Starting the service with an invalid config value makes startup validation throw before listen(); the container restart policy then crash-loops with a byte-identical stack trace.",
+  "trigger": "./break.sh restart-loop",
+  "expected_log_signature": "Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex",
+  "ground_truth": "The service validates VICTIM_API_KEY while loading configuration at startup and throws because the value is not a 32-character lowercase hex string. The process exits before binding its port, and Docker's restart policy starts it again endlessly, repeating the identical startup stack trace on every cycle.",
+  "match": {
+    "keywords": [
+      "victim_api_key",
+      "api key",
+      "config",
+      "invalid",
+      "startup",
+      "restart",
+      "hex",
+      "crash loop",
+      "before listen"
+    ],
+    "min_keywords": 3,
+    "similarity_threshold": 0.3
+  }
+}
