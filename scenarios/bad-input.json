@@ -1,5 +1,6 @@
 {
   "name": "bad-input",
+  "kind": "generic-fatal",
   "summary": "A null field in the JSON body makes POST /api/items dereference null, throwing an uncaught TypeError that crashes the process with a real stack trace.",
   "trigger": "./break.sh bad-input",
   "variants": ["name", "quantity", "tags", "malformed"],
@@ -16,7 +17,6 @@
       "uncaught",
       "not validated"
     ],
-    "min_keywords": 3,
-    "similarity_threshold": 0.3
+    "min_keywords": 3
   }
 }

@@ -1,0 +1,18 @@
+{
+  "name": "python-traceback",
+  "kind": "python-traceback",
+  "summary": "GET /raise makes the Python service call .strip() on a None field; the unhandled AttributeError prints a real Python traceback.",
+  "trigger": "./break.sh python-traceback",
+  "expected_log_signature": "AttributeError: 'NoneType' object has no attribute 'strip'",
+  "ground_truth": "The Python service's /raise handler reads a field that is None and immediately calls .strip() on it, raising an unhandled AttributeError ('NoneType' object has no attribute 'strip'). The handler never catches it, so the interpreter prints a full Python traceback to stderr.",
+  "match": {
+    "keywords": [
+      "nonetype",
+      "attributeerror",
+      "strip",
+      "traceback",
+      "none"
+    ],
+    "min_keywords": 2
+  }
+}

@@ -3,9 +3,10 @@
 docs/
 .commandcode/
 
-# Runtime / scratch output from evaluations.
+# Runtime / scratch output from evaluations (scenario fixtures are kept).
 reports/
 *.log
+!scenarios/*.log
 payloads/
 
 # Node (the service is dependency-free, but keep the tree clean).
@@ -14,9 +15,6 @@ node_modules/
 # Python caches from the evaluator.
 __pycache__/
 *.pyc
-
-# Command Code session state.
-.commandcode/
 
 # OS noise.
 .DS_Store

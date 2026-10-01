@@ -1,5 +1,6 @@
 {
   "name": "restart-loop",
+  "kind": "generic-fatal",
   "summary": "Starting the service with an invalid config value makes startup validation throw before listen(); the container restart policy then crash-loops with a byte-identical stack trace.",
   "trigger": "./break.sh restart-loop",
   "expected_log_signature": "Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex",
@@ -16,7 +17,6 @@
       "crash loop",
       "before listen"
     ],
-    "min_keywords": 3,
-    "similarity_threshold": 0.3
+    "min_keywords": 3
   }
 }

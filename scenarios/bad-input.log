@@ -1,0 +1,18 @@
+{"ts":"2026-10-01T16:16:30.081Z","level":"info","service":"victim-api","msg":"server.listening","port":8080}
+{"ts":"2026-10-01T16:16:30.139Z","level":"info","service":"victim-api","msg":"request.received","method":"GET","path":"/health"}
+{"ts":"2026-10-01T16:16:31.300Z","level":"info","service":"victim-api","msg":"request.received","method":"GET","path":"/health"}
+{"ts":"2026-10-01T16:16:31.307Z","level":"info","service":"victim-api","msg":"request.received","method":"POST","path":"/api/items"}
+/app/service/server.js:25
+  const name = payload.name.trim();
+                            ^
+
+TypeError: Cannot read properties of null (reading 'trim')
+    at createItem (/app/service/server.js:25:29)
+    at /app/service/server.js:58:29
+    at IncomingMessage.<anonymous> (/app/service/server.js:20:23)
+    at IncomingMessage.emit (node:events:524:28)
+    at endReadableNT (node:internal/streams/readable:1698:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)
+
+Node.js v20.20.2
+{"ts":"2026-10-01T16:16:31.838Z","level":"info","service":"victim-api","msg":"server.listening","port":8080}

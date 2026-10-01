@@ -1,3 +1,5 @@
+name: watcher_victim
+
 services:
   victim-api:
     build:
@@ -11,8 +13,41 @@ services:
     environment:
       VICTIM_PORT: "8080"
       VICTIM_API_KEY: "${VICTIM_API_KEY:-0123456789abcdef0123456789abcdef}"
+      NODE_OPTIONS: "--max-old-space-size=${VICTIM_HEAP_MB:-96}"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  victim-go:
+    build:
+      context: ./go-service
+      dockerfile: Dockerfile
+    image: watcher-victim-go:local
+    container_name: watcher-victim-go
+    restart: always
+    ports:
+      - "18082:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  victim-python:
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    image: watcher-victim-python:local
+    container_name: watcher-victim-python
+    restart: always
+    ports:
+      - "18083:8082"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8082/health"]
       interval: 10s
       timeout: 3s
       retries: 3

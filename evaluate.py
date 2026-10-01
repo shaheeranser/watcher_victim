@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """Score Watcher's crash explanations against this harness's documented ground truth.
 
-The only handle on Watcher is the ``--watcher`` argument: a path or URL to its
-structured output (a JSON array, JSONL, or a single object / webhook payload).
-Nothing here assumes a sibling directory or a fixed filesystem path.
+Written against Watcher's evaluation contract (``specs/04-evaluation/design.md``):
+the identifier modes, ground-truth shapes, similarity metric, and failure
+categories mirror that spec, so the harness's numbers are comparable to the
+future in-repo ``watcher eval``.
+
+The only handle on Watcher is ``--watcher``: a path or URL to its JSON Lines
+incident stream (or a generic webhook payload). Nothing here assumes a sibling
+directory or a fixed filesystem path.
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
+import csv
+import io
 import json
+import re
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -23,6 +31,23 @@ BREAK_SH = ROOT / "break.sh"
 
 LIST_KEYS = ("records", "results", "events", "items", "explanations", "entries", "data")
 POLL_INTERVAL_SECONDS = 1.0
+
+# CORE-OUT-3 fields that identify a line as a Watcher result.
+RESULT_MARKERS = ("fingerprint", "likely_cause", "explanation_unavailable")
+
+# design.md §4.1 stopword set.
+STOPWORDS = {"a", "the", "in", "of", "on", "at", "to", "is", "was"}
+
+# design.md §4.3 failure categories.
+PASS = "pass"
+CAUSE_MISMATCH = "cause_mismatch"
+NO_EXPLANATION = "no_explanation"
+NO_RESULT = "no_result"
+KIND_MISMATCH = "kind_mismatch"
+
+# restart-loop leaves the stack crash-looping; every other scenario recovers on
+# its own, so only this one needs a recreate before and after.
+NEEDS_RESET = {"restart-loop"}
 
 
 def read_source(source: str) -> str:
@@ -83,16 +108,54 @@ def find_key(obj, key):
     return None
 
 
-def fingerprint(record) -> str:
+def is_result(record: dict) -> bool:
+    """A line is a Watcher result if it carries any CORE-OUT-3 anchor field.
+
+    This deliberately includes ``explanation_unavailable`` lines, which have no
+    ``likely_cause``. Treating those as "no output" would hide the
+    ``no_explanation`` failure the spec asks us to count (design.md §4.3).
+    """
+    return any(find_key(record, key) is not None for key in RESULT_MARKERS)
+
+
+def normalize(text: str) -> str:
+    """design.md §4.1: NFKC, lowercase, strip punctuation, drop stopwords."""
+    text = unicodedata.normalize("NFKC", text).lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return " ".join(token for token in text.split() if token not in STOPWORDS)
+
+
+def _dice(left: set, right: set) -> float:
+    if not left or not right:
+        return 0.0
+    return 2 * len(left & right) / (len(left) + len(right))
+
+
+def _trigrams(text: str) -> set:
+    compact = text.replace(" ", "")
+    return {compact[i : i + 3] for i in range(len(compact) - 2)}
+
+
+def spec_similarity(expected: str, actual: str) -> float:
+    """design.md §4.2: max(token-set Dice, character-trigram Dice)."""
+    norm_expected = normalize(expected)
+    norm_actual = normalize(actual)
+    if not norm_expected or not norm_actual:
+        return 0.0
+    if norm_expected == norm_actual:
+        return 1.0
+    tokens = _dice(set(norm_expected.split()), set(norm_actual.split()))
+    grams = _dice(_trigrams(norm_expected), _trigrams(norm_actual))
+    return max(tokens, grams)
+
+
+def payload_fingerprint(record) -> str:
     return json.dumps(record, sort_keys=True, default=str)
 
 
-def with_cause(records: list[dict]) -> list[dict]:
-    return [record for record in records if find_key(record, "likely_cause") is not None]
-
-
 class WatcherFeed:
-    """Polls the Watcher output source for records newer than the last baseline."""
+    """Polls the Watcher output source for results newer than the last baseline."""
 
     def __init__(self, source: str):
         self.source = source
@@ -109,9 +172,9 @@ class WatcherFeed:
         if mode == "list":
             self.baseline_count = len(payload)
         else:
-            self.baseline_fp = fingerprint(payload)
+            self.baseline_fp = payload_fingerprint(payload)
 
-    def wait_for_new(self, timeout_seconds: float) -> dict | None:
+    def wait_for_new(self, timeout_seconds: float, run_id: str | None = None) -> dict | None:
         deadline = time.time() + timeout_seconds
         while True:
             try:
@@ -120,35 +183,87 @@ class WatcherFeed:
                 mode, payload = self.mode, ([] if self.mode == "list" else {})
 
             if mode == "list":
-                if len(payload) > self.baseline_count:
-                    fresh = with_cause(payload[self.baseline_count:])
-                    self.baseline_count = len(payload)
-                    if fresh:
-                        return fresh[-1]
+                fresh = [record for record in payload[self.baseline_count:] if is_result(record)]
+                if fresh:
+                    chosen = self._choose(fresh, run_id)
+                    if chosen is not None:
+                        self.baseline_count = len(payload)
+                        return chosen
             else:
-                current = fingerprint(payload)
-                if current != self.baseline_fp:
+                current = payload_fingerprint(payload)
+                if current != self.baseline_fp and is_result(payload):
                     self.baseline_fp = current
-                    if find_key(payload, "likely_cause") is not None:
-                        return payload
+                    return payload
 
             if time.time() >= deadline:
                 return None
             time.sleep(POLL_INTERVAL_SECONDS)
 
+    @staticmethod
+    def _choose(fresh: list[dict], run_id: str | None) -> dict | None:
+        if run_id is None:
+            return fresh[-1]
+        matched = [record for record in fresh if str(find_key(record, "run_id") or "") == run_id]
+        if matched:
+            return matched[-1]
+        # Producer does not echo run ids yet (milestone 04); fall back to newest.
+        if not any(find_key(record, "run_id") is not None for record in fresh):
+            return fresh[-1]
+        return None
 
-def score(ground_truth: str, likely_cause: str | None, spec: dict) -> tuple[bool, list[str], float]:
-    cause = (likely_cause or "").strip()
-    if not cause:
-        return False, [], 0.0
-    lowered = cause.lower()
+
+def keyword_match(spec: dict, actual_cause: str) -> tuple[bool, list[str]]:
+    lowered = actual_cause.lower()
     keywords = [str(keyword).lower() for keyword in spec.get("keywords", [])]
     hits = [keyword for keyword in keywords if keyword in lowered]
-    ratio = difflib.SequenceMatcher(None, ground_truth.lower(), lowered).ratio()
     min_keywords = int(spec.get("min_keywords", max(1, (len(keywords) + 1) // 2)))
-    threshold = float(spec.get("similarity_threshold", 0.35))
-    passed = (bool(keywords) and len(hits) >= min_keywords) or ratio >= threshold
-    return passed, hits, ratio
+    return (bool(keywords) and len(hits) >= min_keywords), hits
+
+
+def _outcome(category, passed, score, cause, kind, kind_match, error, fp, hits=None) -> dict:
+    return {
+        "category": category,
+        "passed": passed,
+        "score": score,
+        "likely_cause": cause,
+        "actual_kind": kind,
+        "kind_match": kind_match,
+        "explanation_error": error,
+        "fingerprint": fp,
+        "matched_keywords": hits or [],
+    }
+
+
+def classify(scenario: dict, record: dict | None, metric: str, threshold: float, require_kind: bool) -> dict:
+    if record is None:
+        return _outcome(NO_RESULT, False, 0.0, None, None, None, None, None)
+
+    expected_kind = scenario.get("kind")
+    unavailable = find_key(record, "explanation_unavailable")
+    actual_cause = find_key(record, "likely_cause") or ""
+    actual_kind = find_key(record, "kind")
+    error = find_key(record, "error")
+    fp = find_key(record, "fingerprint")
+
+    if unavailable or not str(actual_cause).strip():
+        return _outcome(NO_EXPLANATION, False, 0.0, None, actual_kind, None, error, fp)
+
+    score = spec_similarity(scenario["ground_truth"], actual_cause)
+    kind_match = expected_kind is None or actual_kind == expected_kind
+
+    if metric == "similarity":
+        cause_ok, hits = score >= threshold, []
+    else:
+        cause_ok, hits = keyword_match(scenario.get("match", {}), actual_cause)
+
+    if not cause_ok:
+        category, passed = CAUSE_MISMATCH, False
+    elif not kind_match:
+        category, passed = KIND_MISMATCH, not require_kind
+    else:
+        category, passed = PASS, True
+
+    return _outcome(category, passed, round(score, 3), str(actual_cause), actual_kind, kind_match, error, fp, hits)
 
 
 def load_scenarios(selected: list[str] | None) -> list[dict]:
@@ -162,45 +277,16 @@ def load_scenarios(selected: list[str] | None) -> list[dict]:
 
 
 def run_break(*args: str) -> int:
-    proc = subprocess.run(
-        ["bash", str(BREAK_SH), *args],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-    )
+    proc = subprocess.run(["bash", str(BREAK_SH), *args], cwd=str(ROOT), capture_output=True, text=True)
     return proc.returncode
 
 
-def run_scenario(scenario: dict, feed: WatcherFeed, runs: int, wait_seconds: float) -> dict:
-    name = scenario["name"]
-    ground_truth = scenario["ground_truth"]
-    spec = scenario.get("match", {})
-    outcomes = []
-
-    for run_index in range(1, runs + 1):
-        run_break("reset")
-        feed.baseline()
-        trigger_code = run_break(name)
-        record = feed.wait_for_new(wait_seconds)
-        likely_cause = find_key(record, "likely_cause") if record else None
-        passed, hits, ratio = score(ground_truth, likely_cause, spec)
-        outcomes.append(
-            {
-                "run": run_index,
-                "passed": passed,
-                "likely_cause": likely_cause,
-                "matched_keywords": hits,
-                "similarity": round(ratio, 3),
-                "watcher_output": record is not None,
-                "trigger_exit_code": trigger_code,
-            }
-        )
-
+def aggregate(scenario: dict, outcomes: list[dict]) -> dict:
     passes = sum(1 for outcome in outcomes if outcome["passed"])
     return {
-        "name": name,
-        "summary": scenario.get("summary", ""),
-        "ground_truth": ground_truth,
+        "name": scenario["name"],
+        "kind": scenario.get("kind", "unknown"),
+        "ground_truth": scenario["ground_truth"],
         "runs": len(outcomes),
         "passes": passes,
         "failures": len(outcomes) - passes,
@@ -209,64 +295,156 @@ def run_scenario(scenario: dict, feed: WatcherFeed, runs: int, wait_seconds: flo
     }
 
 
-def print_summary(results: list[dict]) -> None:
-    print()
-    header = f"{'scenario':<14}{'runs':>5}{'pass':>6}{'fail':>6}{'pass rate':>11}"
-    print(header)
-    print("-" * len(header))
-    total_runs = total_passes = 0
-    for result in results:
-        total_runs += result["runs"]
-        total_passes += result["passes"]
-        print(
-            f"{result['name']:<14}{result['runs']:>5}{result['passes']:>6}"
-            f"{result['failures']:>6}{result['pass_rate'] * 100:>10.0f}%"
-        )
-    overall = (total_passes / total_runs * 100) if total_runs else 0.0
-    print("-" * len(header))
-    print(f"{'TOTAL':<14}{total_runs:>5}{total_passes:>6}{total_runs - total_passes:>6}{overall:>10.0f}%")
+def run_scenario_online(scenario, feed, runs, wait_seconds, metric, threshold, require_kind, identifier):
+    outcomes = []
+    name = scenario["name"]
+    for run_index in range(1, runs + 1):
+        if name in NEEDS_RESET:
+            run_break("reset")
+        run_id = name if identifier == "run_id" else None
+        feed.baseline()
+        run_break(name)
+        record = feed.wait_for_new(wait_seconds, run_id)
+        outcome = classify(scenario, record, metric, threshold, require_kind)
+        outcome["run"] = run_index
+        outcomes.append(outcome)
+        if name in NEEDS_RESET:
+            run_break("reset")
+    return aggregate(scenario, outcomes)
 
-    print("\nPer-run detail:")
+
+def run_scenario_offline(scenario, records, start, runs, metric, threshold, require_kind):
+    outcomes = []
+    for offset in range(runs):
+        index = start + offset
+        record = records[index] if index < len(records) else None
+        outcome = classify(scenario, record, metric, threshold, require_kind)
+        outcome["run"] = offset + 1
+        outcomes.append(outcome)
+    return aggregate(scenario, outcomes)
+
+
+def write_truth(path: Path, scenarios: list[dict], truth_format: str) -> None:
+    if truth_format == "map":
+        text = json.dumps({s["name"]: s["ground_truth"] for s in scenarios}, indent=2) + "\n"
+    elif truth_format == "csv":
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["id", "expected_cause", "kind"])
+        for scenario in scenarios:
+            writer.writerow([scenario["name"], scenario["ground_truth"], scenario.get("kind", "")])
+        text = buffer.getvalue()
+    else:
+        cases = [
+            {"id": s["name"], "expected_cause": s["ground_truth"], "kind": s.get("kind")}
+            for s in scenarios
+        ]
+        text = json.dumps({"cases": cases}, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def build_report(results, identifier, metric, threshold, require_kind) -> dict:
+    cases = []
+    by_kind: dict[str, dict[str, int]] = {}
+    total = passed = 0
     for result in results:
-        print(f"\n  {result['name']}")
-        print(f"    ground truth: {result['ground_truth']}")
+        bucket = by_kind.setdefault(result["kind"], {"total": 0, "passed": 0})
         for outcome in result["outcomes"]:
-            verdict = "PASS" if outcome["passed"] else "FAIL"
-            cause = outcome["likely_cause"] or "<no output>"
-            print(f"    [{verdict}] run {outcome['run']}: {cause}")
+            bucket["total"] += 1
+            total += 1
+            if outcome["passed"]:
+                bucket["passed"] += 1
+                passed += 1
+            cases.append(
+                {
+                    "id": f"{result['name']}#{outcome['run']}",
+                    "scenario": result["name"],
+                    "category": outcome["category"],
+                    "score": outcome["score"],
+                    "expected_cause": result["ground_truth"],
+                    "actual_cause": outcome["likely_cause"],
+                    "expected_kind": result["kind"],
+                    "actual_kind": outcome["actual_kind"],
+                    "kind_match": outcome["kind_match"],
+                    "explanation_error": outcome["explanation_error"],
+                    "fingerprint": outcome["fingerprint"],
+                }
+            )
+    return {
+        "schema_version": 1,
+        "identifier": identifier,
+        "metric": metric,
+        "threshold": threshold,
+        "require_kind": require_kind,
+        "total": total,
+        "passed": passed,
+        "failed": total - passed,
+        "pass_rate": round(passed / total, 3) if total else 0.0,
+        "by_kind": by_kind,
+        "cases": cases,
+    }
 
 
-def write_report(path: Path, results: list[dict], source: str, runs: int) -> None:
-    total_runs = sum(result["runs"] for result in results)
-    total_passes = sum(result["passes"] for result in results)
-    overall = (total_passes / total_runs * 100) if total_runs else 0.0
+def print_summary(results, metric, threshold, identifier) -> None:
+    report = build_report(results, identifier, metric, threshold, False)
+    total, passed = report["total"], report["passed"]
 
+    print()
+    print(
+        f"Watcher evaluation — {total} cases   "
+        f"(identifier: {identifier}, metric: {metric}, threshold = {threshold:.2f})"
+    )
+    print()
+    print(f"  PASS {passed} / {total}   {report['pass_rate'] * 100:.1f}%")
+
+    print("\n  by detector kind")
+    for kind, bucket in sorted(report["by_kind"].items()):
+        rate = bucket["passed"] / bucket["total"] * 100 if bucket["total"] else 0.0
+        print(f"    {kind:<18}{bucket['passed']}/{bucket['total']:<4}{rate:>7.1f}%")
+
+    failures = [(result, outcome) for result in results for outcome in result["outcomes"] if not outcome["passed"]]
+    if failures:
+        print(f"\n  Failures ({len(failures)})")
+        for result, outcome in failures:
+            print(f"    {result['name']}#{outcome['run']:<16}{outcome['category']:<16}sim {outcome['score']:.2f}")
+            print(f"      expected: {result['ground_truth']}")
+            print(f"      actual:   {outcome['likely_cause'] or '(no explanation)'}")
+
+
+def write_markdown_report(path: Path, results, source, runs, metric, threshold, identifier) -> None:
+    report = build_report(results, identifier, metric, threshold, False)
     lines = [
         "# Watcher evaluation results",
         "",
         f"- Watcher output source: `{source}`",
         f"- Runs per scenario: {runs}",
-        f"- Overall pass rate: **{overall:.0f}%** ({total_passes}/{total_runs})",
+        f"- Identifier: `{identifier}`, metric: `{metric}`, threshold: {threshold:.2f}",
+        f"- Overall pass rate: **{report['pass_rate'] * 100:.0f}%** ({report['passed']}/{report['total']})",
         "",
-        "| Scenario | Passed | Failed | Pass rate |",
+        "| Kind | Passed | Total | Pass rate |",
         "| --- | ---: | ---: | ---: |",
     ]
-    for result in results:
-        lines.append(
-            f"| {result['name']} | {result['passes']} | {result['failures']} "
-            f"| {result['pass_rate'] * 100:.0f}% |"
-        )
+    for kind, bucket in sorted(report["by_kind"].items()):
+        rate = bucket["passed"] / bucket["total"] * 100 if bucket["total"] else 0.0
+        lines.append(f"| {kind} | {bucket['passed']} | {bucket['total']} | {rate:.0f}% |")
 
-    lines += ["", "## Ground truth and runs", ""]
+    lines += ["", "## Cases", "", "| Case | Category | Score |", "| --- | --- | ---: |"]
+    for case in report["cases"]:
+        lines.append(f"| {case['id']} | {case['category']} | {case['score']:.2f} |")
+
+    lines += ["", "## Detail", ""]
     for result in results:
-        lines.append(f"**{result['name']}**")
+        lines.append(f"**{result['name']}** ({result['kind']})")
         lines.append("")
         lines.append(f"Ground truth: {result['ground_truth']}")
         lines.append("")
         for outcome in result["outcomes"]:
             verdict = "PASS" if outcome["passed"] else "FAIL"
-            cause = outcome["likely_cause"] or "(no output)"
-            lines.append(f"- `{verdict}` run {outcome['run']}: {cause}")
+            cause = outcome["likely_cause"] or "(no explanation)"
+            lines.append(
+                f"- `{verdict}` run {outcome['run']} [{outcome['category']}] (sim {outcome['score']:.2f}): {cause}"
+            )
         lines.append("")
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,53 +456,101 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Score Watcher's likely_cause against documented ground truth.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
-        "--watcher",
-        required=True,
-        help="Path or URL to Watcher's structured output or webhook payload.",
-    )
+    parser.add_argument("--watcher", default=None, help="Path or URL to Watcher's JSONL output or generic webhook payload.")
     parser.add_argument("--runs", type=int, default=3, help="Runs per scenario.")
+    parser.add_argument("--scenario", action="append", default=None, help="Only evaluate this scenario (repeatable).")
+    parser.add_argument("--wait", type=float, default=15.0, help="Seconds to wait for Watcher per triggered crash.")
     parser.add_argument(
-        "--scenario",
-        action="append",
-        default=None,
-        help="Only evaluate this scenario (repeatable).",
+        "--identifier",
+        choices=("newest", "run_id"),
+        default="newest",
+        help="How a result is correlated with a scenario (design.md §2).",
     )
     parser.add_argument(
-        "--wait",
-        type=float,
-        default=15.0,
-        help="Seconds to wait for Watcher to explain each triggered crash.",
+        "--metric",
+        choices=("keywords", "similarity"),
+        default="keywords",
+        help="Pass metric: harness keywords, or the spec similarity (design.md §4).",
     )
-    parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON results.")
+    parser.add_argument("--threshold", type=float, default=0.60, help="Pass threshold for --metric similarity (tau).")
+    parser.add_argument("--require-kind", action="store_true", help="Fail a case when the detector kind differs.")
+    parser.add_argument("--offline", action="store_true", help="Score records in --watcher in order; do not touch Docker.")
+    parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the JSON report (design.md §5.2 shape).")
     parser.add_argument("--report", type=Path, default=None, help="Write a Markdown report here.")
+    parser.add_argument("--min-pass-rate", type=float, default=None, help="CI gate: exit non-zero below this pass rate.")
+    parser.add_argument("--emit-truth", type=Path, default=None, help="Write scenarios/*.json as a truth file and exit.")
+    parser.add_argument(
+        "--truth-format",
+        choices=("cases", "map", "csv"),
+        default="cases",
+        help="Truth file shape for --emit-truth (design.md §3.1).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    if args.emit_truth:
+        scenarios = load_scenarios(args.scenario)
+        if not scenarios:
+            print("no scenarios selected", file=sys.stderr)
+            return 2
+        write_truth(args.emit_truth, scenarios, args.truth_format)
+        print(f"wrote {args.truth_format} truth for {len(scenarios)} scenarios to {args.emit_truth}", file=sys.stderr)
+        return 0
+
+    if not args.watcher:
+        print("--watcher is required (or use --emit-truth)", file=sys.stderr)
+        return 2
+
     scenarios = load_scenarios(args.scenario)
     if not scenarios:
         print("no scenarios selected", file=sys.stderr)
         return 2
 
-    feed = WatcherFeed(args.watcher)
     results = []
-    try:
+    if args.offline:
+        _, records = parse_payload(read_source(args.watcher))
+        cursor = 0
         for scenario in scenarios:
-            print(f"running scenario '{scenario['name']}' x{args.runs} ...", file=sys.stderr)
-            results.append(run_scenario(scenario, feed, args.runs, args.wait))
-    finally:
-        run_break("reset")
+            print(f"scoring scenario '{scenario['name']}' x{args.runs} (offline) ...", file=sys.stderr)
+            results.append(
+                run_scenario_offline(scenario, records, cursor, args.runs, args.metric, args.threshold, args.require_kind)
+            )
+            cursor += args.runs
+    else:
+        feed = WatcherFeed(args.watcher)
+        try:
+            for scenario in scenarios:
+                print(f"running scenario '{scenario['name']}' x{args.runs} ...", file=sys.stderr)
+                results.append(
+                    run_scenario_online(
+                        scenario, feed, args.runs, args.wait, args.metric, args.threshold, args.require_kind, args.identifier
+                    )
+                )
+        finally:
+            run_break("reset")
+
+    report = build_report(results, args.identifier, args.metric, args.threshold, args.require_kind)
 
     if args.as_json:
-        print(json.dumps(results, indent=2))
+        print(json.dumps(report, indent=2))
     else:
-        print_summary(results)
+        print_summary(results, args.metric, args.threshold, args.identifier)
 
     if args.report:
-        write_report(args.report, results, args.watcher, args.runs)
+        write_markdown_report(args.report, results, args.watcher, args.runs, args.metric, args.threshold, args.identifier)
         print(f"\nreport written to {args.report}", file=sys.stderr)
+
+    if args.min_pass_rate is not None:
+        verdict = report["pass_rate"] >= args.min_pass_rate
+        print(
+            f"\ngate: pass rate {report['pass_rate']:.2f} vs min {args.min_pass_rate:.2f} -> "
+            f"{'PASS' if verdict else 'FAIL'}",
+            file=sys.stderr,
+        )
+        return 0 if verdict else 1
 
     return 0
 

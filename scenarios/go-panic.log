@@ -1,0 +1,9 @@
+2026-10-01T16:17:32Z INFO victim-go listening on :8081
+panic: assignment to entry in nil map
+
+goroutine 37 [running]:
+main.crash()
+	victim-go/main.go:12 +0x28
+created by main.main.func2 in goroutine 5
+	victim-go/main.go:35 +0x25
+2026-10-01T16:17:33Z INFO victim-go listening on :8081

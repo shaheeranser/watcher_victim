@@ -1,0 +1,80 @@
+/app/service/config.js:23
+    throw new Error(
+    ^
+
+Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex, got "not-a-valid-key"
+    at validateApiKey (/app/service/config.js:23:11)
+    at loadConfig (/app/service/config.js:33:13)
+    at Object.<anonymous> (/app/service/server.js:7:16)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v20.20.2
+/app/service/config.js:23
+    throw new Error(
+    ^
+
+Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex, got "not-a-valid-key"
+    at validateApiKey (/app/service/config.js:23:11)
+    at loadConfig (/app/service/config.js:33:13)
+    at Object.<anonymous> (/app/service/server.js:7:16)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v20.20.2
+/app/service/config.js:23
+    throw new Error(
+    ^
+
+Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex, got "not-a-valid-key"
+    at validateApiKey (/app/service/config.js:23:11)
+    at loadConfig (/app/service/config.js:33:13)
+    at Object.<anonymous> (/app/service/server.js:7:16)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v20.20.2
+/app/service/config.js:23
+    throw new Error(
+    ^
+
+Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex, got "not-a-valid-key"
+    at validateApiKey (/app/service/config.js:23:11)
+    at loadConfig (/app/service/config.js:33:13)
+    at Object.<anonymous> (/app/service/server.js:7:16)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v20.20.2
+/app/service/config.js:23
+    throw new Error(
+    ^
+
+Error: Invalid VICTIM_API_KEY: expected 32-char lowercase hex, got "not-a-valid-key"
+    at validateApiKey (/app/service/config.js:23:11)
+    at loadConfig (/app/service/config.js:33:13)
+    at Object.<anonymous> (/app/service/server.js:7:16)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49
+
+Node.js v20.20.2

@@ -1,5 +1,6 @@
 {
   "name": "timeout",
+  "kind": "generic-fatal",
   "summary": "POST /api/bulk buffers the entire request body into memory with no size limit; an oversized payload exhausts the Node.js heap and aborts the process.",
   "trigger": "./break.sh timeout",
   "expected_log_signature": "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
@@ -17,7 +18,6 @@
       "buffer",
       "exhaust"
     ],
-    "min_keywords": 3,
-    "similarity_threshold": 0.3
+    "min_keywords": 3
   }
 }
